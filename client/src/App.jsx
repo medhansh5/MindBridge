@@ -1,148 +1,159 @@
-import { useState, useEffect } from 'react'
-import axios from 'axios'
-import { Heart, Trash2, Plus } from 'lucide-react'
+import React, { useState, useEffect, useRef } from 'react';
+import { Header } from './components/Layout/Header';
+import { Footer } from './components/Layout/Footer';
+import { PostForm } from './components/Posts/PostForm';
+import { PostList } from './components/Posts/PostList';
+import { ResourceLibrary } from './components/Resources/ResourceLibrary';
+import { SOSBanner } from './components/SOS/SOSBanner';
+import { SOSModal } from './components/SOS/SOSModal';
+import { PeerMatchCard } from './components/PeerMatch/PeerMatchCard';
+import { PeerMatchModal } from './components/PeerMatch/PeerMatchModal';
+import { ToastContainer } from './components/UI/Toast';
+import { usePosts } from './hooks/usePosts';
+import { useToast, ToastProvider } from './hooks/useToast';
+import * as api from './api/client';
 
-function App() {
-  const [posts, setPosts] = useState([])
-  const [newPost, setNewPost] = useState({ content: '', category: '' })
-  const [loading, setLoading] = useState(false)
+const AppContent = () => {
+  const [currentView, setCurrentView] = useState('feed'); // 'feed' | 'resources'
+  const [showSOS, setShowSOS] = useState(false);
+  
+  // Peer Match State
+  const [availableListeners, setAvailableListeners] = useState(0);
+  const [peerLoading, setPeerLoading] = useState(null); // 'requesting' | 'volunteering' | null
+  const [isVolunteering, setIsVolunteering] = useState(false);
+  const [matchResult, setMatchResult] = useState(null);
+  const [showMatchModal, setShowMatchModal] = useState(false);
+  
+  // Stable sessionId for volunteering (persists across renders)
+  const sessionIdRef = useRef(crypto.randomUUID ? crypto.randomUUID() : Date.now().toString() + Math.random().toString(36).slice(2));
 
-  // Fetch posts from backend
-  const fetchPosts = async () => {
-    try {
-      const response = await axios.get('http://localhost:3001/api/posts')
-      setPosts(response.data)
-    } catch (error) {
-      console.error('Error fetching posts:', error)
-    }
-  }
+  const { posts, loading: postsLoading, error: postsError, createPost, deletePost, likePost, refreshPosts } = usePosts();
+  const { addToast } = useToast();
 
   useEffect(() => {
-    fetchPosts()
-  }, [])
+    // Poll available listeners
+    const fetchListeners = async () => {
+      try {
+        const { data } = await api.getAvailableListeners();
+        setAvailableListeners(data.count);
+      } catch (err) {
+        // fail silently
+      }
+    };
+    fetchListeners();
+    const interval = setInterval(fetchListeners, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
-  // Create new post
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!newPost.content.trim() || !newPost.category.trim()) return
-
+  const handleRequestMatch = async () => {
     try {
-      const response = await axios.post('http://localhost:3001/api/posts', newPost)
-      setPosts([response.data, ...posts])
-      setNewPost({ content: '', category: '' })
-    } catch (error) {
-      console.error('Error creating post:', error)
+      setPeerLoading('requesting');
+      const { data } = await api.requestPeerMatch();
+      if (data.matched) {
+        setMatchResult(data);
+        setShowMatchModal(true);
+        addToast('Match found successfully!', 'success');
+      } else {
+        addToast('No listeners available right now. Please try again later.', 'info');
+      }
+    } catch (err) {
+      addToast('Failed to find a match. Please try again.', 'error');
+    } finally {
+      setPeerLoading(null);
     }
-  }
+  };
 
-  // Pessimistic like update
-  const handleLike = async (postId) => {
-    console.log('Liking post with ID:', postId)
-    
+  const handleVolunteer = async () => {
     try {
-      const response = await axios.post(`http://localhost:3001/api/posts/${postId}/like`)
-      
-      // Update only the specific post with server-returned data
-      setPosts(posts.map(post => 
-        post.id === postId ? response.data : post
-      ))
-    } catch (error) {
-      console.error('Error liking post:', error)
+      setPeerLoading('volunteering');
+      await api.volunteerAsListener(sessionIdRef.current);
+      setIsVolunteering(true);
+      addToast('You are now listed as an available listener. Thank you!', 'success');
+    } catch (err) {
+      addToast('Failed to volunteer. Please try again.', 'error');
+    } finally {
+      setPeerLoading(null);
     }
-  }
+  };
 
-  // Pessimistic delete
-  const handleDelete = async (postId) => {
-    console.log('Deleting post with ID:', postId)
-    
+  const handleStopVolunteering = async () => {
     try {
-      await axios.delete(`http://localhost:3001/api/posts/${postId}`)
-      
-      // Only remove from local state after successful server response
-      setPosts(posts.filter(post => post.id !== postId))
-    } catch (error) {
-      console.error('Error deleting post:', error)
+      setPeerLoading('volunteering');
+      await api.removeVolunteer(sessionIdRef.current);
+      setIsVolunteering(false);
+      addToast('You are no longer listed as a listener.', 'info');
+    } catch (err) {
+      addToast('Failed to update status.', 'error');
+    } finally {
+      setPeerLoading(null);
     }
-  }
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold text-gray-800 mb-8 text-center">MindBridge V2</h1>
-        
-        {/* Create Post Form */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-8">
-          <h2 className="text-xl font-semibold mb-4">Share Your Thoughts</h2>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <input
-              type="text"
-              placeholder="Category (e.g., Study Tips, Mental Health, Career)"
-              value={newPost.category}
-              onChange={(e) => setNewPost({ ...newPost, category: e.target.value })}
-              className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              required
+    <div className="app">
+      <Header 
+        currentView={currentView} 
+        onViewChange={setCurrentView} 
+        onOpenSOS={() => setShowSOS(true)} 
+      />
+      
+      <main className="main">
+        {currentView === 'feed' ? (
+          <>
+            <PeerMatchCard
+              availableCount={availableListeners}
+              onRequestMatch={handleRequestMatch}
+              onVolunteer={handleVolunteer}
+              isVolunteering={isVolunteering}
+              onStopVolunteering={handleStopVolunteering}
+              matchResult={matchResult}
+              loading={peerLoading}
             />
-            <textarea
-              placeholder="What's on your mind?"
-              value={newPost.content}
-              onChange={(e) => setNewPost({ ...newPost, content: e.target.value })}
-              className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 h-32 resize-none"
-              required
-            />
-            <button
-              type="submit"
-              className="flex items-center gap-2 bg-blue-500 text-white px-6 py-2 rounded-md hover:bg-blue-600 transition-colors"
-            >
-              <Plus size={20} />
-              Post
-            </button>
-          </form>
-        </div>
+            
+            <div style={{ marginBottom: '2rem' }}>
+              <h2 style={{ marginBottom: '1rem' }}>Community Feed</h2>
+              <PostForm onSubmit={createPost} />
+              <PostList 
+                posts={posts} 
+                loading={postsLoading} 
+                error={postsError} 
+                onLike={likePost} 
+                onDelete={deletePost}
+                onRetry={refreshPosts}
+              />
+            </div>
+          </>
+        ) : (
+          <div>
+            <h2 style={{ marginBottom: '0.5rem' }}>Resource Library</h2>
+            <p style={{ color: 'var(--color-text-muted)', marginBottom: '2rem' }}>
+              Explore curated strategies, tips, and guides for mental wellness.
+            </p>
+            <ResourceLibrary />
+          </div>
+        )}
+      </main>
 
-        {/* Posts List */}
-        <div className="space-y-4">
-          {posts.map((post) => (
-            <div key={post.id} className="bg-white rounded-lg shadow-md p-6">
-              <div className="flex justify-between items-start mb-4">
-                <div className="flex-1">
-                  <span className="inline-block bg-blue-100 text-blue-800 text-sm px-3 py-1 rounded-full mb-2">
-                    {post.category}
-                  </span>
-                  <p className="text-gray-800 whitespace-pre-wrap">{post.content}</p>
-                </div>
-                <button
-                  onClick={() => handleDelete(post.id)}
-                  className="ml-4 text-red-500 hover:text-red-700 transition-colors"
-                  aria-label="Delete post"
-                >
-                  <Trash2 size={20} />
-                </button>
-              </div>
-              
-              <div className="flex items-center gap-4 text-gray-600">
-                <button
-                  onClick={() => handleLike(post.id)}
-                  className="flex items-center gap-2 hover:text-red-500 transition-colors"
-                >
-                  <Heart size={20} className="fill-current" />
-                  <span>{post.likes || 0}</span>
-                </button>
-                <span className="text-sm">
-                  {new Date(post.createdAt).toLocaleDateString()}
-                </span>
-              </div>
-            </div>
-          ))}
-          
-          {posts.length === 0 && (
-            <div className="text-center py-12 text-gray-500">
-              <p>No posts yet. Be the first to share!</p>
-            </div>
-          )}
-        </div>
-      </div>
+      <Footer />
+      
+      <SOSBanner onOpenSOS={() => setShowSOS(true)} />
+      <SOSModal isOpen={showSOS} onClose={() => setShowSOS(false)} />
+      
+      <PeerMatchModal 
+        isOpen={showMatchModal} 
+        onClose={() => setShowMatchModal(false)} 
+        matchResult={matchResult} 
+      />
+      
+      <ToastContainer />
     </div>
-  )
-}
+  );
+};
 
-export default App
+export default function App() {
+  return (
+    <ToastProvider>
+      <AppContent />
+    </ToastProvider>
+  );
+}
